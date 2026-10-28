@@ -142,6 +142,22 @@ The file `{{WORKSPACE}}\ReinstallClaude.md` is a portable bootstrap guide for re
 - Python packages installed or removed -- update the package list
 - New system tools installed or removed -- update the tools section
 
+## Model Update Check
+
+At the start of each session, check if `~/.claude/model-update-notification.md` exists:
+
+```
+Test-Path "$env:USERPROFILE\.claude\model-update-notification.md"
+```
+
+If it exists:
+1. Read it and present the update summary to the user
+2. Offer to run the project scanner: `{{PYTHON_CMD}} "{{WORKSPACE}}\scan-model-usage.py"`
+3. After the user has reviewed and confirmed, delete the notification file
+4. If new models are listed, update `~/.claude/model-check-state.json` `known_models` array
+
+Do not check for this file more than once per session. If no notification file exists, skip this step silently.
+
 ## Session Conventions
 
 ### Starting a Session in a New Project Directory

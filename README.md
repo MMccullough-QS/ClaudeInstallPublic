@@ -51,6 +51,10 @@ Follow the prompts. The installer detects your environment and asks only for val
 2. Run `claude` and authenticate
 3. Update `CLAUDE.md` in your workspace with your active projects
 4. Create a GitHub repo for your workspace and push
+5. Register the weekly model update check (optional but recommended):
+   ```powershell
+   pwsh -NoProfile -File setup-model-check-task.ps1
+   ```
 
 ## Conventions included
 
@@ -63,7 +67,19 @@ Every session Claude will follow:
 - **Code comments** — `# WHY:` tags for non-obvious choices; no paraphrasing comments
 - **Rejected approaches** — captured in SPEC.md to prevent re-proposing abandoned ideas
 - **Tool evaluation** — checklist before installing any MCP server or plugin
+- **Model update alerts** — notified at session start when new Claude models are available; prompted to scan projects for upgrade candidates
+
+## Model Updates
+
+`check-model-updates.py` runs weekly via Task Scheduler and checks for new Claude model releases. When a new model is detected, it writes a notification to `~/.claude/model-update-notification.md`. Claude reads this at the start of the next session and offers to run `scan-model-usage.py` to find hardcoded model strings across your projects.
 
 ## Keeping in sync
 
-When you update `~/.claude/CLAUDE.md`, the auto-checkpoint hook will remind you to update your local `ReinstallClaude.md`. For major changes, re-run `setup.ps1` from this repo to get the latest conventions.
+**For your own machines:** When you update `~/.claude/CLAUDE.md`, the auto-checkpoint hook reminds you to update `ReinstallClaude.md`. For major changes, re-run `setup.ps1` to get the latest conventions.
+
+**For colleagues:** When you push updates to this repo, they pull and re-run `setup.ps1`:
+```powershell
+git pull
+pwsh -NoProfile -File setup.ps1
+```
+setup.ps1 skips files that already exist (workspace CLAUDE.md, .gitignore, Tasks) so re-running is safe — it only updates the hook scripts and config files.

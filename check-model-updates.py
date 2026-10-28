@@ -71,16 +71,18 @@ def check_via_api(api_key):
 
 def check_via_npm():
     """Return latest @anthropic-ai/claude-code version from npm registry."""
-    try:
-        result = subprocess.run(
-            ["npm", "show", "@anthropic-ai/claude-code", "version"],
-            capture_output=True, text=True, timeout=15,
-        )
-        version = result.stdout.strip()
-        return version if version else None
-    except Exception as e:
-        print(f"  npm check failed: {e}", file=sys.stderr)
-        return None
+    # WHY: Windows uses npm.cmd; shell=True lets the OS resolve it either way
+    for cmd in (["npm", "show", "@anthropic-ai/claude-code", "version"],):
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=15, shell=True
+            )
+            version = result.stdout.strip()
+            if version:
+                return version
+        except Exception as e:
+            print(f"  npm check failed: {e}", file=sys.stderr)
+    return None
 
 
 def write_notification(new_models, new_cc_version, old_models, old_cc_version):

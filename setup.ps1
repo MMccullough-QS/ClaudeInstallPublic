@@ -68,7 +68,7 @@ function Toggle-Features([string]$title, [System.Collections.Specialized.Ordered
 # ---------------------------------------------------------------------------
 # SCREEN 1: Welcome and narrative
 # ---------------------------------------------------------------------------
-Clear-Host
+try { Clear-Host } catch {}
 Write-Header "Claude Code Workspace Setup"
 
 Write-Host "  This installer configures Claude Code for a consistent, team-ready"

@@ -35,7 +35,7 @@ function Write-Section([string]$text) {
 # ---------------------------------------------------------------------------
 # SCREEN 1: Header
 # ---------------------------------------------------------------------------
-Clear-Host
+try { Clear-Host } catch {}
 Write-Header "Claude Code Workspace Update"
 
 Write-Host "  This script pulls the latest conventions and hook scripts from"
@@ -318,21 +318,29 @@ if (Test-Path $tmplPath) {
 
     $shouldWrite = $true
     if (Test-Path $claudeMdPath) {
-        $existingHash = (Get-FileHash $claudeMdPath -Algorithm MD5).Hash
-        $newHash      = (Get-FileHash ([System.IO.MemoryStream][System.Text.Encoding]::UTF8.GetBytes($newClaudeMd)) -Algorithm MD5).Hash
-        if ($existingHash -eq $newHash) {
-            Write-Host "    CLAUDE.md is already up to date -- skipped"
+        # If this machine's workspace IS the parent of scriptDir (i.e. the repo owner),
+        # skip CLAUDE.md -- their personal version has private content not in the template.
+        $scriptParent = Split-Path $scriptDir -Parent
+        if ($scriptParent -eq $workspace) {
+            Write-Host "    CLAUDE.md skipped -- this is the source machine. Update ~/.claude/CLAUDE.md manually if needed." -ForegroundColor Yellow
             $shouldWrite = $false
         } else {
-            Write-Host ""
-            Write-Host "    ~/.claude/CLAUDE.md has changes from the new template." -ForegroundColor Yellow
-            Write-Host "    This will REPLACE your current CLAUDE.md, including any edits you made."
-            Write-Host "    Your workspace CLAUDE.md is NOT affected."
-            Write-Host ""
-            $claudeConfirm = Read-Host "    Update ~/.claude/CLAUDE.md? [y/N]"
-            $shouldWrite = ($claudeConfirm -match '^[Yy]')
-            if (-not $shouldWrite) {
-                Write-Host "    Skipped. To apply manually: compare templates\global-claude-md.md to your current CLAUDE.md." -ForegroundColor Yellow
+            $existingHash = (Get-FileHash $claudeMdPath -Algorithm MD5).Hash
+            $newHash = (Get-FileHash ([System.IO.MemoryStream][System.Text.Encoding]::UTF8.GetBytes($newClaudeMd)) -Algorithm MD5).Hash
+            if ($existingHash -eq $newHash) {
+                Write-Host "    CLAUDE.md is already up to date -- skipped"
+                $shouldWrite = $false
+            } else {
+                Write-Host ""
+                Write-Host "    ~/.claude/CLAUDE.md has changes from the new template." -ForegroundColor Yellow
+                Write-Host "    This will REPLACE your current CLAUDE.md, including any edits you made."
+                Write-Host "    Your workspace CLAUDE.md is NOT affected."
+                Write-Host ""
+                $claudeConfirm = Read-Host "    Update ~/.claude/CLAUDE.md? [y/N]"
+                $shouldWrite = ($claudeConfirm -match '^[Yy]')
+                if (-not $shouldWrite) {
+                    Write-Host "    Skipped. Compare templates\global-claude-md.md to your CLAUDE.md to apply changes manually." -ForegroundColor Yellow
+                }
             }
         }
     }

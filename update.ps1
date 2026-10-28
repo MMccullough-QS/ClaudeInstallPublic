@@ -168,9 +168,11 @@ Write-Host "    scan-model-usage.py       (hardcoded model string scanner)"
 Write-Host "    ClaudeModelCheck task     (Task Scheduler -- if registered)"
 Write-Host ""
 Write-Host "  NOT TOUCHED:"
-Write-Host "    ~/.claude/.mcp.json       (contains your tokens)"
+Write-Host "    ~/.claude/.mcp.json            (contains your tokens)"
 Write-Host "    ~/.claude/settings.local.json  (your command permissions)"
 Write-Host "    Workspace CLAUDE.md, .gitignore, Tasks/  (your project files)"
+Write-Host "    Your custom hooks in settings.json  (merged, not replaced)"
+Write-Host "    ~/.claude/CLAUDE.md            (you will be asked before this changes)"
 Write-Host ""
 
 $confirm = Read-Host "  Apply update? [Y/n]"
@@ -228,44 +230,72 @@ if ($optionalUpdated.Count -gt 0) {
     $optionalUpdated | ForEach-Object { Write-Host "    $_" }
 }
 
-# ~/.claude/settings.json (regenerate -- hook paths may have changed)
+# ~/.claude/settings.json -- merge our managed hooks, preserve user additions
 Write-Host "  Updating ~/.claude/settings.json..."
 function Get-HookCmd([string]$script) { "pwsh -NoProfile -File `"$(Join-Path $workspace $script)`"" }
 
-$newSettings = [ordered]@{
-    hooks = [ordered]@{
-        PreToolUse  = @(@{ matcher="Edit|Write"; hooks=@(@{ type="command"; command=(Get-HookCmd "check-sensitive-file.ps1") }) })
-        PostToolUse = @(
-            @{ matcher="Write|Edit"; hooks=@(@{ type="command"; command=(Get-HookCmd "check-secrets.ps1") }) },
-            @{ matcher="Write|Edit"; hooks=@(@{ type="command"; command=(Get-HookCmd "check-claude-md-sync.ps1") }) }
-        )
-        Stop       = @(@{ hooks=@(@{ type="command"; command=(Get-HookCmd "auto-checkpoint.ps1") }) })
-        PreCompact = @(@{ hooks=@(@{ type="command"; command=(Get-HookCmd "auto-checkpoint.ps1") }) })
-    }
-    autoUpdatesChannel = "latest"
-    permissions = [ordered]@{
-        deny = @(
-            "Bash(rm -rf:*)", "Bash(git push --force:*)", "Bash(git push -f:*)",
-            "Bash(git reset --hard:*)", "Bash(git clean -f:*)"
-        )
-    }
-}
-# Preserve any extra hook entries the user may have added (e.g. Notification hooks)
-if (Test-Path $settingsPath) {
-    try {
-        $existing = Get-Content $settingsPath -Raw | ConvertFrom-Json
-        if ($existing.hooks.Notification) {
-            $newSettings.hooks["Notification"] = $existing.hooks.Notification
-            Write-Host "    (preserving existing Notification hooks)"
-        }
-    } catch {}
-}
-$newSettings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding UTF8
-Write-Host "    settings.json"
+# Our managed scripts -- used to identify which hook entries we own
+$ourScripts = @("auto-checkpoint.ps1","check-secrets.ps1","check-sensitive-file.ps1","check-claude-md-sync.ps1")
 
-# ~/.claude/CLAUDE.md from template
-Write-Host "  Updating ~/.claude/CLAUDE.md..."
-$tmplPath = Join-Path $scriptDir "templates\global-claude-md.md"
+function Test-IsOurHook($entry) {
+    foreach ($h in @($entry.hooks)) {
+        foreach ($s in $ourScripts) {
+            if ($h.command -match [regex]::Escape($s)) { return $true }
+        }
+    }
+    return $false
+}
+
+# Latest versions of our managed hook entries
+$ourHooksByEvent = @{
+    PreToolUse  = @(@{ matcher="Edit|Write"; hooks=@(@{ type="command"; command=(Get-HookCmd "check-sensitive-file.ps1") }) })
+    PostToolUse = @(
+        @{ matcher="Write|Edit"; hooks=@(@{ type="command"; command=(Get-HookCmd "check-secrets.ps1") }) },
+        @{ matcher="Write|Edit"; hooks=@(@{ type="command"; command=(Get-HookCmd "check-claude-md-sync.ps1") }) }
+    )
+    Stop        = @(@{ hooks=@(@{ type="command"; command=(Get-HookCmd "auto-checkpoint.ps1") }) })
+    PreCompact  = @(@{ hooks=@(@{ type="command"; command=(Get-HookCmd "auto-checkpoint.ps1") }) })
+}
+
+# Load existing settings or start from a minimal base
+$settingsObj = if (Test-Path $settingsPath) {
+    try { Get-Content $settingsPath -Raw | ConvertFrom-Json -AsHashtable }
+    catch { @{} }
+} else { @{} }
+
+if (-not $settingsObj.hooks)       { $settingsObj.hooks = @{} }
+if (-not $settingsObj.permissions) { $settingsObj.permissions = @{} }
+
+# For each managed event: keep user's non-our entries, replace our entries with latest
+$preserved = @()
+foreach ($event in $ourHooksByEvent.Keys) {
+    $existing    = if ($settingsObj.hooks[$event]) { @($settingsObj.hooks[$event]) } else { @() }
+    $userEntries = @($existing | Where-Object { -not (Test-IsOurHook $_) })
+    if ($userEntries.Count -gt 0) { $preserved += "$event ($($userEntries.Count) custom)" }
+    # Our entries first, user's custom entries appended
+    $settingsObj.hooks[$event] = @($ourHooksByEvent[$event]) + $userEntries
+}
+
+# Ensure deny list exists and contains our entries (merge, don't replace)
+$ourDeny = @("Bash(rm -rf:*)","Bash(git push --force:*)","Bash(git push -f:*)","Bash(git reset --hard:*)","Bash(git clean -f:*)")
+$existingDeny = if ($settingsObj.permissions.deny) { @($settingsObj.permissions.deny) } else { @() }
+$merged = @($existingDeny) + @($ourDeny | Where-Object { $_ -notin $existingDeny })
+$settingsObj.permissions.deny = $merged
+
+if (-not $settingsObj.autoUpdatesChannel) { $settingsObj.autoUpdatesChannel = "latest" }
+
+$settingsObj | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding UTF8
+if ($preserved.Count -gt 0) {
+    Write-Host "    settings.json (preserved user hooks: $($preserved -join ', '))"
+} else {
+    Write-Host "    settings.json"
+}
+
+# ~/.claude/CLAUDE.md -- generate new content from template, ask before overwriting
+Write-Host "  Checking ~/.claude/CLAUDE.md..."
+$claudeMdPath = Join-Path $claudeDir "CLAUDE.md"
+$tmplPath     = Join-Path $scriptDir "templates\global-claude-md.md"
+
 if (Test-Path $tmplPath) {
     $nodeVersion = try { (& node --version 2>&1).Trim() } catch { "" }
     $pwshPath    = (Get-Command pwsh -ErrorAction SilentlyContinue)?.Source ?? "pwsh"
@@ -276,7 +306,7 @@ if (Test-Path $tmplPath) {
     if ($ghPath)      { $otherTools += "- **GitHub CLI (gh)**: found" }
     $otherToolsStr = if ($otherTools) { $otherTools -join "`n" } else { "- (add installed tools here)" }
 
-    (Get-Content $tmplPath -Raw -Encoding UTF8) `
+    $newClaudeMd = (Get-Content $tmplPath -Raw -Encoding UTF8) `
         -replace '\{\{WORKSPACE\}\}',       $workspace `
         -replace '\{\{PYTHON_VERSION\}\}',  $pythonVersion `
         -replace '\{\{PYTHON_CMD\}\}',      $pythonCmd `
@@ -284,9 +314,33 @@ if (Test-Path $tmplPath) {
         -replace '\{\{SITE_PACKAGES\}\}',   $sitePackages `
         -replace '\{\{PYTHON_PACKAGES\}\}', $pythonPkgs `
         -replace '\{\{OTHER_TOOLS_LIST\}\}',$otherToolsStr `
-        -replace '\{\{USERNAME\}\}',        $env:USERNAME |
-    Set-Content (Join-Path $claudeDir "CLAUDE.md") -Encoding UTF8
-    Write-Host "    CLAUDE.md"
+        -replace '\{\{USERNAME\}\}',        $env:USERNAME
+
+    $shouldWrite = $true
+    if (Test-Path $claudeMdPath) {
+        $existingHash = (Get-FileHash $claudeMdPath -Algorithm MD5).Hash
+        $newHash      = (Get-FileHash ([System.IO.MemoryStream][System.Text.Encoding]::UTF8.GetBytes($newClaudeMd)) -Algorithm MD5).Hash
+        if ($existingHash -eq $newHash) {
+            Write-Host "    CLAUDE.md is already up to date -- skipped"
+            $shouldWrite = $false
+        } else {
+            Write-Host ""
+            Write-Host "    ~/.claude/CLAUDE.md has changes from the new template." -ForegroundColor Yellow
+            Write-Host "    This will REPLACE your current CLAUDE.md, including any edits you made."
+            Write-Host "    Your workspace CLAUDE.md is NOT affected."
+            Write-Host ""
+            $claudeConfirm = Read-Host "    Update ~/.claude/CLAUDE.md? [y/N]"
+            $shouldWrite = ($claudeConfirm -match '^[Yy]')
+            if (-not $shouldWrite) {
+                Write-Host "    Skipped. To apply manually: compare templates\global-claude-md.md to your current CLAUDE.md." -ForegroundColor Yellow
+            }
+        }
+    }
+
+    if ($shouldWrite) {
+        Set-Content $claudeMdPath $newClaudeMd -Encoding UTF8
+        Write-Host "    CLAUDE.md updated"
+    }
 } else {
     Write-Host "    WARNING: Template not found -- CLAUDE.md not updated" -ForegroundColor Yellow
 }
